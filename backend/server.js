@@ -1,5 +1,6 @@
 import express from 'express';
 import mongoose from 'mongoose';
+import cors from 'cors'; // Import CORS
 import authRoutes from './routes/auth.js'; // Note the .js extension in ES modules
 import validationRoutes from './routes/validation.js';
 import plannerValidationRoutes from './routes/plannerValidation.js';
@@ -9,6 +10,8 @@ import memoRoutes from './routes/memo.js';
 import paymentRoutes from './routes/payment.js';
 
 const app = express();
+
+app.use(cors());  // This will allow requests from all origins
 
 // Middleware
 app.use(express.json());
