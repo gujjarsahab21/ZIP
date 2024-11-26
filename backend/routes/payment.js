@@ -1,59 +1,28 @@
+// paymentRoutes.js
 import express from 'express';
-import Payment from '../models/Payment.js';
+import Stripe from 'stripe';
 
 const router = express.Router();
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY); // Use the Stripe secret key
 
-// Create a new payment
-router.post('/initiate', async (req, res) => {
+// POST /api/payments/create-intent
+router.post('/create-intent', async (req, res) => {
+  const { amount, currency } = req.body;
+
   try {
-    const { userId, amount } = req.body;
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: Math.round(amount * 100), // Stripe expects amount in cents
+      currency,
+      automatic_payment_methods: { enabled: true },
+    });
 
-    // Create a new payment entry
-    const payment = new Payment({ userId, amount });
-    await payment.save();
-
-    // Simulate payment gateway response (Replace this with Razorpay/Stripe integration later)
-    setTimeout(async () => {
-      payment.status = 'success'; // Assume payment was successful
-      payment.referenceId = `REF-${Date.now()}`;
-      await payment.save();
-    }, 3000);
-
-    res.status(201).json({ message: 'Payment initiated. Awaiting confirmation.', payment });
-  } catch (err) {
-    res.status(500).json({ error: 'Error initiating payment.' });
+    res.status(200).json({
+      clientSecret: paymentIntent.client_secret,
+    });
+  } catch (error) {
+    console.error('Error creating payment intent:', error);
+    res.status(500).json({ message: 'Payment Intent creation failed', error });
   }
 });
-
-// Get payment status
-router.get('/status/:id', async (req, res) => {
-  try {
-    const payment = await Payment.findById(req.params.id);
-    if (!payment) return res.status(404).json({ error: 'Payment not found.' });
-
-    res.status(200).json(payment);
-  } catch (err) {
-    res.status(500).json({ error: 'Error fetching payment status.' });
-  }
-});
-
-// Get payment history for a user
-router.get('/history/:userId', async (req, res) => {
-    try {
-      const { userId } = req.params;
-  
-      // Find payments for the user, sorted by date (most recent first)
-      const payments = await Payment.find({ userId }).sort({ paymentDate: -1 });
-  
-      if (!payments || payments.length === 0) {
-        return res.status(404).json({ error: "No payment history found for this user." });
-      }
-  
-      res.status(200).json(payments);
-    } catch (err) {
-      res.status(500).json({ error: "Error fetching payment history." });
-    }
-  });
-  
 
 export default router;

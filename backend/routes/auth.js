@@ -1,138 +1,154 @@
 import express from 'express';
 import bcrypt from 'bcrypt';
-import User from '../models/User.js'; // Note the .js extension in ES modules
+import User from '../models/User.js'; // Import the User model
 import jwt from 'jsonwebtoken';
+import multer from 'multer';
+import path from 'path';
+import authController from "../controllers/authController.js";
+import dotenv from 'dotenv';
+import Member from '../models/member.js';  // Import Member model
+import Membership from '../models/Membership.js';
+
+dotenv.config();
 
 const router = express.Router();
 
-const protectRoute = (req, res, next) => {
-  const token = req.headers.authorization?.split(" ")[1];
-  if (!token) {
-    return res.status(401).json({ error: "No token, authorization denied." });
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/'); // Directory to store uploaded files
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + path.extname(file.originalname)); // Unique filename
+  },
+});
+
+const upload = multer({ storage });
+
+const authenticate = async (req, res, next) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ error: 'Unauthorized: No token provided' });
   }
 
-  jwt.verify(token, 'your_secret_key', (err, decoded) => {
-    if (err) {
-      return res.status(403).json({ error: "Token is not valid." });
-    }
-    req.user = decoded;
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.userId = decoded.id;
     next();
-  });
+  } catch (err) {
+    return res.status(401).json({ error: 'Unauthorized: Invalid token' });
+  }
 };
 
+// Login Route
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    // Find user by email
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required.' });
+    }
+
     const user = await User.findOne({ email });
     if (!user) {
       return res.status(400).json({ error: 'Invalid email or password.' });
     }
 
-    // Compare passwords
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(400).json({ error: 'Invalid email or password.' });
     }
 
-    // Generate JWT token
     const token = jwt.sign(
       { id: user._id, email: user.email },
-      'your_secret_key', // Replace with your actual secret key
+      process.env.JWT_SECRET,
       { expiresIn: '1h' }
     );
 
     res.status(200).json({ message: 'Login successful!', token });
   } catch (err) {
+    console.error('Error during login:', err);
     res.status(500).json({ error: 'Internal server error.' });
   }
 });
 
-router.post('/register', async (req, res) => {
+// Register Route
+router.post('/register', upload.single('profilePhoto'), async (req, res) => {
   try {
-    const { name, email, password, username } = req.body;
+    const { firstName, lastName, email, password, username, phone, address, membershipType } = req.body;
 
-    // Check if username is provided
-    if (!username) {
-      return res.status(400).json({ error: 'Username is required' });
-    }
+    const existingEmail = await User.findOne({ email });
+    const existingUsername = await User.findOne({ username });
 
-    // Log the email for debugging
-    console.log("Email being checked:", email);
-
-    // Check if the email already exists in the database
-    const existingEmailUser = await User.findOne({ email });
-    if (existingEmailUser) {
-      console.log("User with email already exists:", existingEmailUser);
+    if (existingEmail) {
       return res.status(400).json({ error: 'Email already in use.' });
     }
-
-    // Check if the username already exists in the database
-    const existingUsernameUser = await User.findOne({ username });
-    if (existingUsernameUser) {
-      console.log("User with username already exists:", existingUsernameUser);
+    if (existingUsername) {
       return res.status(400).json({ error: 'Username already in use.' });
     }
 
-    // Hash the password before saving
     const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Create the new user with name, email, password, and username
+    // Create the user in the User collection
     const user = new User({
-      name,
+      firstName,
+      lastName,
       email,
       password: hashedPassword,
-      username,  // Include the username in the user document
+      username,
+      phone,
+      address,
+      membershipType,
+      profilePhoto: req.file ? req.file.path : '', 
     });
 
-    // Save the new user to the database
+    // Save the user to the User collection
     await user.save();
 
-    // Send success response
-    res.status(201).json({ message: 'Registration successful!' });
+    // Create a corresponding entry in the Member collection
+    const newMember = new Member({
+      firstName,
+      lastName,
+      email,
+      membershipStatus: 'inactive', // Default status for new users
+    });
 
-  } catch (err) {
-    console.error("Error during registration:", err);  // Log the error for debugging
+    // Save the new member to the Member collection
+    await newMember.save();
+
+    // Create a corresponding Membership entry in the Membership collection
+    const newMembership = new Membership({
+      plannerId: user.plannerId, // Link to the user's plannerId
+      expiryDate: new Date('2024-12-31'), // Example expiry date
+      membershipCategory: 'Type I', // Example membership category, could be dynamic
+    });
+
+    // Save the new membership to the Membership collection
+    await newMembership.save();
+
+
+    res.status(201).json({ message: 'User and Member registered successfully!' });
+  } catch (error) {
+    console.error(error);
     res.status(500).json({ error: 'Internal server error.' });
   }
 });
 
-
-
-router.get('/profile', protectRoute, async (req, res) => {
+// Profile Route (Get user profile)
+router.get('/profile', authenticate, async (req, res) => {
   try {
-    const user = await User.findById(req.user.id).select('-password');
+    const user = await User.findById(req.userId);
     if (!user) {
       return res.status(404).json({ error: 'User not found' });
     }
     res.status(200).json(user);
   } catch (err) {
-    res.status(500).json({ error: 'Internal server error' });
+    console.error(err);
+    res.status(500).json({ error: 'Failed to fetch profile' });
   }
 });
 
-
-router.put('/update-profile/:id', async (req, res) => {
-  const { id } = req.params;
-  const { name, phone, address } = req.body;
-
-  try {
-    const user = await User.findByIdAndUpdate(
-      id,
-      { name, phone, address },
-      { new: true } // Return the updated user
-    );
-
-    if (!user) {
-      return res.status(404).json({ error: "User not found." });
-    }
-
-    res.status(200).json({ message: "Profile updated successfully", user });
-  } catch (err) {
-    res.status(500).json({ error: "Error updating profile." });
-  }
-});
-
+// Update Profile Route
+router.put('/profile', authenticate, authController.updateProfile);
 
 export default router;

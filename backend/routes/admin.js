@@ -1,34 +1,52 @@
-// routes/admin.js
-
 import express from 'express';
-import User from '../models/User.js';  // Import the User model
+import { loginAdmin, registerAdmin } from '../controllers/adminController.js';
+import Admin from '../models/admin.js';
+import bcrypt from 'bcrypt';
+import jwt from 'jsonwebtoken';
 
 const router = express.Router();
 
-// Admin route to fetch all users
-router.get('/members', async (req, res) => {
+// Admin login route
+router.post('/login', async (req, res) => {
+  const { email, password } = req.body;
+
   try {
-    const users = await User.find();  // Fetch all users from MongoDB
-    res.status(200).json(users);  // Send the list of users as a JSON response
-  } catch (error) {
-    res.status(500).json({ message: 'Error fetching users' });
+    console.log('Login Attempt:', { email, password });
+
+    // Check if admin exists
+    const admin = await Admin.findOne({ email });
+    if (!admin) {
+      console.log('Admin not found');
+      return res.status(404).json({ message: 'Admin not found' });
+    }
+    console.log('Admin Found:', admin);
+
+    // Verify password
+    const isPasswordValid = await bcrypt.compare(password, admin.password);
+    console.log('Password Valid:', isPasswordValid);
+
+    if (!isPasswordValid) {
+      console.log('Invalid Password');
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+
+    // Generate JWT
+    const token = jwt.sign(
+      { id: admin._id, email: admin.email, role: 'admin' },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+    console.log('Token Generated:', token);
+
+    res.json({ message: 'Login successful', token });
+  } catch (err) {
+    console.error('Server Error:', err);
+    res.status(500).json({ message: 'Server error' });
   }
 });
 
-// Admin route to update user membership status
-router.put('/members/:id', async (req, res) => {
-  try {
-    const { membershipStatus } = req.body;  // Get membership status from request body
-    const user = await User.findById(req.params.id);  // Find user by ID
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-    user.membershipStatus = membershipStatus;  // Update the user's membership status
-    await user.save();  // Save the updated user data
-    res.status(200).json({ message: 'User status updated successfully' });
-  } catch (error) {
-    res.status(500).json({ message: 'Error updating user status' });
-  }
-});
+
+// Optional route for registering admins
+router.post('/register', registerAdmin);
 
 export default router;
